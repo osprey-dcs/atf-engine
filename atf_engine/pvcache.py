@@ -46,6 +46,9 @@ class PVCache:
     def all_connected(self):
         return all([e._value is not None for e in self._C.values()])
 
+    def disconnected(self):
+        return [k for k,e in self._C.items() if e._value is None]
+
 class PVEntry:
     def __init__(self, cache:PVCache, pv:str, signed=None):
         self.name, self.__cache, self.signed = pv, cache, signed
@@ -69,8 +72,10 @@ class PVEntry:
         V = self._value
         if V is not None:
             V = V.value
-            if hasattr(V, 'index'):
+            if hasattr(V, 'choices'):
                 V = V.choices[V.index]
+            elif isinstance(V, str):
+                V = V.strip()
             return V
         else:
             return None
@@ -79,3 +84,4 @@ class PVEntry:
         R = self.value
         if R is None:
             raise ValueError(f'{self.name} Disconnect')
+        return R

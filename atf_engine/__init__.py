@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import time
+import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -33,14 +34,14 @@ class Engine:
         self._last_out = SharedPV(nt=NTScalar('s'), initial='')
         self.serv_pvs = {
             f'{prefix}CTRL:Run-SP': self._run_stop,
-            f'{prefix}CTRL:Ready-I': self._status,
+            f'{prefix}SA:READY_': self._status,
             f'{prefix}CTRL:LastName-I': self._last_name,
             f'{prefix}CTRL:LastMsg-I': self._last_msg,
             f'{prefix}CTRL:LastFile-I': self._last_out,
         }
 
         # ready input
-        self.ready = PV(f'{prefix}SYS:ready_')
+        self.ready = PV(f'{prefix}SA:READY')
         # ADC run output
         self.acq = PV(f'{prefix}ACQ:enable')
 
@@ -77,12 +78,14 @@ class Engine:
                 for node in range(1, 33)
                 for ch in range(1, 33)
             ],
+            'Chassis': [],
         }
 
         self.ready_to_go = False
         self._statusT = asyncio.create_task(self.watch_status(), name='Status Task')
         self._sequenceT = None
         self._sequenceStop = None
+        _log.debug('Engine ctor complete')
 
     async def __aenter__(self):
         return self
@@ -124,13 +127,30 @@ class Engine:
 
     async def watch_status(self):
         while True:
-            async with self.cache:
-                await self.cache.wait()
-                prev = self.ready_to_go
-                self.ready_to_go = ready = self.cache.all_connected() and self.ready.value==1 and self.acq.value==0
-                if prev!=ready:
-                    _log.debug('status change %r -> %r', prev, ready)
-                    self._status.post(int(ready))
+            try:
+                async with self.cache:
+                    await self.cache.wait()
+                    _log.debug('Recompute status')
+                    prev, ready = self.ready_to_go, True
+                    if not self.cache.all_connected():
+                        if _log.isEnabledFor(logging.DEBUG):
+                            _log.debug('not all_connected.  remaining: %r ...', self.cache.disconnected()[:10])
+                        ready = False
+                    elif not (self.ready.value=='Ready'):
+                        _log.debug('not ready: %r', self.ready.value)
+                        ready = False
+                    elif not (self.acq.value=='Disable'):
+                        _log.debug('not disabled: %r', self.acq.value)
+                        ready = False
+                    self.ready_to_go = ready
+                    if prev!=ready:
+                        _log.debug('status change %r -> %r', prev, ready)
+                        self._status.post(int(ready))
+            except asyncio.CancelledError:
+                raise
+            except:
+                _log.exception('oops!')
+                await time.sleep(10) # at least slow down the log spam...
 
     async def sequence(self):
         try:
@@ -140,7 +160,7 @@ class Engine:
             self._sequenceStop = asyncio.Event()
             await self._sequence()
             self._last_msg.post('Success')
-        except CancelledError:
+        except asyncio.CancelledError:
             self._last_msg.post('Abort')
             raise
         except:
@@ -149,8 +169,10 @@ class Engine:
         finally:
             _log.debug('Cleanup after sequence')
             try:
+                self._run_stop.post(0)
                 self._status.post(0)
                 async with asyncio.timeout(5.0): # bound time of cleanup.  eg. during cancel()
+                    await self.ctxt.put(self.acq.name, {'value.index':0})
                     await self.ctxt.put(self.Record, [{'value.index':0}]*32)
                     await self.ctxt.put(self.FileDir, [{'value':''}]*32)
                     await self.ctxt.put(self.FileBase, [{'value':''}]*32)
@@ -169,7 +191,7 @@ class Engine:
         info = json.loads(jmeta)
 
         # filter inuse signals and chassis
-        Signals = [S for S in info['Signals'] if S['Inuse']==1]
+        info['Signals'] = Signals = [S for S in info['Signals'] if S['Inuse']=='Yes']
         if len(Signals)==0:
             raise RuntimeError('No signals in use, check CCCR')
         Chassis = {S['Address']['Chassis'] for S in Signals}
@@ -177,6 +199,8 @@ class Engine:
 
         desc = info['AcquisitionId'] # base ID w/o datetime
         info['AcquisitionStartDate'] = time.strftime('%Y%m%d %H%M%S%z', T)
+
+        assert desc.strip()==desc, desc
 
         # /data/YYYY/mm/YYYYmmDD-HHMMSS-desc/
         rundir = self.outbase \
@@ -193,7 +217,7 @@ class Engine:
 
         await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*32)
         await self.ctxt.put(self.FileBase, [{'value':p} for p in CHprefix])
-        await self.ctxt.put(self.Record, [{'value.index':1}])
+        await self.ctxt.put(self.Record, [{'value.index':1}]*32)
         _log.debug('Recording paths are set')
 
         # write out only meta-data before any .dat written for context if something goes wrong...
@@ -202,7 +226,7 @@ class Engine:
             F.write(jmeta)
             _log.debug('Wrote preliminary JSON %s', F.name)
 
-        await self.ctxt.put(self.acq, {'value.index':1})
+        await self.ctxt.put(self.acq.name, {'value.index':1})
         _log.info('Acquiring...')
         self._last_msg.post('Acquire') # everything up to this point should happen quickly
 
@@ -210,12 +234,30 @@ class Engine:
         _log.info('Stop Acquire...')
         self._last_msg.post('Stopping...') # acknowledge stop command
 
-        await self.ctxt.put(self.acq, {'value.index':0})
+        await self.ctxt.put(self.acq.name, {'value.index':0})
         _log.debug('Stopped Acquire...')
 
         # need to wait for in-flight packets to land on disk.
         # TODO: how to do this properly?
         await asyncio.sleep(5.0)
+
+        # find .dat files
+        info['Chassis'] = []
+        for chas in Chassis:
+            _log.debug('look for chassis %d %s*.dat', chas, CHprefix[chas-1])
+            dats = glob.glob(str(rundir / f'{CHprefix[chas-1]}*.dat'))
+            if len(dats)!=1:
+                _log.warning('Not 1 .dat for chassis %d: %r', chas, dats)
+
+            info['Chassis'].append({
+                'Chassis': chas,
+                'Dat': dats,
+            })
+
+        with hdr.open('w') as F: # must not already exist
+            json.dump(info, F, indent=' ')
+            _log.debug('Wrote second JSON %s', F.name)
+
         self._last_msg.post('Post-process')
 
 
