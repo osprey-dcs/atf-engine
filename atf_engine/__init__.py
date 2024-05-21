@@ -5,6 +5,8 @@ import logging
 import shutil
 import time
 import glob
+import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,12 +16,14 @@ from p4p.server import Server
 from p4p.server.asyncio import SharedPV
 
 from .pvcache import PVCache, PVEncoder
+from .convert import findexe, runProc
 
 _log = logging.getLogger(__name__)
 
 class Engine:
-    def __init__(self, prefix:str, base:Path):
+    def __init__(self, prefix:str, base:Path, fileConverter:str):
         self.outbase = base
+        self.fileConverter = fileConverter
         self.ctxt = Context(nt=False)
         self.cond = asyncio.Condition()
         self.cache = PV = PVCache(self.ctxt, cond=self.cond)
@@ -160,6 +164,7 @@ class Engine:
             self._sequenceStop = asyncio.Event()
             await self._sequence()
             self._last_msg.post('Success')
+            _log.debug('Success')
         except asyncio.CancelledError:
             self._last_msg.post('Abort')
             raise
@@ -251,7 +256,7 @@ class Engine:
 
             info['Chassis'].append({
                 'Chassis': chas,
-                'Dat': dats,
+                'Dat': [str(Path(d).relative_to(hdr.parent)) for d in dats],
             })
 
         with hdr.open('w') as F: # must not already exist
@@ -260,24 +265,18 @@ class Engine:
 
         self._last_msg.post('Post-process')
 
+        # run as seperate process to mimic testing environment
+        await runProc(
+            sys.executable,
+            '-m', 'atf_engine.convert',
+            '--fileConverter', self.fileConverter,
+            str(hdr),
+            f'{hdr}.tmp',
+        )
+        os.rename(f'{hdr}.tmp', str(hdr))
+        _log.debug('Finished with: %s', hdr)
 
-#        with TemporaryDirectory(dir=str(rundir)) as tempdir:
-#            tempdir = Path(tempdir)
-#            Tasks = []
-#            for ch in Chassis:
-
-        # state Convert
-        # write meta-only .hdr
-
-        # mkdir 32x /tmp
-        # launch converters
-
-        # read partial headers
-        # move 1024x channel .j
-
-        # write final .hdr
-
-        # Done
+        self._last_out.post(str(hdr.absolute()))
 
 def getargs():
     from argparse import ArgumentParser
@@ -291,6 +290,8 @@ def getargs():
                    help='Enable extra application logging')
     P.add_argument('-d', '--debug', action='store_true',
                    help='Enable extra asyncio logging')
+    P.add_argument('--fileConverter', type=findexe,
+                   help='Location of FileReformatter2 executable')
     return P
 
 async def main(args):
@@ -299,7 +300,7 @@ async def main(args):
     import signal
     loop = asyncio.get_running_loop()
 
-    async with Engine(prefix=args.prefix, base=args.root) as E:
+    async with Engine(prefix=args.prefix, base=args.root, fileConverter=args.fileConverter) as E:
         with Server(providers=[E.serv_pvs]):
             done = asyncio.Event()
             loop.add_signal_handler(signal.SIGINT, done.set)
