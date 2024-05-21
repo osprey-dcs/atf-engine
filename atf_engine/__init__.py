@@ -194,7 +194,7 @@ class Engine:
         info['Signals'] = Signals = [S for S in info['Signals'] if S['Inuse']=='Yes']
         if len(Signals)==0:
             raise RuntimeError('No signals in use, check CCCR')
-        Chassis = {S['Address']['Chassis'] for S in Signals}
+        Chassis = {S['Address']['Chassis'] for S in Signals} # {1->32}
         _log.debug('Recording with %d chassis', len(Chassis))
 
         desc = info['AcquisitionId'] # base ID w/o datetime
@@ -217,7 +217,7 @@ class Engine:
 
         await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*32)
         await self.ctxt.put(self.FileBase, [{'value':p} for p in CHprefix])
-        await self.ctxt.put(self.Record, [{'value.index':1}]*32)
+        await self.ctxt.put(self.Record, [{'value.index':chas in Chassis} for chas in range(1,33)])
         _log.debug('Recording paths are set')
 
         # write out only meta-data before any .dat written for context if something goes wrong...
