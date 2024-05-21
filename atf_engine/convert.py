@@ -10,13 +10,14 @@ from tempfile import TemporaryDirectory
 
 _log = logging.getLogger(__name__)
 
+def findexe(s):
+    R = shutil.which(s)
+    if R is None:
+        raise RuntimeError(f'Executable not found: {s}')
+    return R
+
 def getargs():
-    from argparse import ArgumentParser, ArgumentError
-    def findexe(s):
-        R = shutil.which(s)
-        if R is None:
-            raise ArgumentError(f'Executable not found: {s}')
-        return R
+    from argparse import ArgumentParser
 
     P = ArgumentParser()
     P.add_argument('-v', '--verbose', dest='level', default=logging.INFO,
@@ -62,7 +63,7 @@ async def main(args):
         idxCH[(sig['Address']['Chassis'], sig['Address']['Channel'])] = i
 
     outdir = args.output.parent
-    _out.debug('Output to %s', outdir)
+    _log.debug('Output to %s', outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     # place temp dir on the output file system so that moving files is cheap
@@ -106,10 +107,10 @@ async def main(args):
                 chas_dir.mkdir(exist_ok=True)
                 chan_file = chan_data.rename(chan_file) # move (not copy) out of tempdir
 
-                info['Signals'][idx]['OutDataFile'] = str(chan_file)
+                info['Signals'][idx]['OutDataFile'] = str(chan_file.relative_to(args.output.parent))
 
     with args.output.open('w') as F:
-        json.dump(info, F)
+        json.dump(info, F, indent='  ')
 
 
 if __name__=='__main__':
