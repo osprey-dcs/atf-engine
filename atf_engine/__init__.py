@@ -149,7 +149,7 @@ class Engine:
                     self.ready_to_go = ready
                     if prev!=ready:
                         _log.debug('status change %r -> %r', prev, ready)
-                        self._status.post(int(ready))
+                        self._status.post(int(ready), timestamp=time.time())
             except asyncio.CancelledError:
                 raise
             except:
@@ -158,23 +158,23 @@ class Engine:
 
     async def sequence(self):
         try:
-            self._run_stop.post(1)
+            self._run_stop.post(1, timestamp=time.time())
             _log.debug('Sequence starting')
             assert self._sequenceT==asyncio.current_task(), (self._sequenceT, asyncio.current_task())
             self._sequenceStop = asyncio.Event()
             await self._sequence()
-            self._last_msg.post('Success')
+            self._last_msg.post('Success', timestamp=time.time())
             _log.debug('Success')
         except asyncio.CancelledError:
-            self._last_msg.post('Abort')
+            self._last_msg.post('Abort', timestamp=time.time())
             raise
         except:
             _log.exception("oops")
-            self._last_msg.post('Failure')
+            self._last_msg.post('Failure', timestamp=time.time())
         finally:
             _log.debug('Cleanup after sequence')
             try:
-                self._run_stop.post(0)
+                self._run_stop.post(0, timestamp=time.time())
                 async with asyncio.timeout(5.0): # bound time of cleanup.  eg. during cancel()
                     await self.ctxt.put(self.acq.name, {'value.index':0})
                     await self.ctxt.put(self.Record, [{'value.index':0}]*32)
@@ -217,7 +217,7 @@ class Engine:
         fprefix = time.strftime(f'{desc}-%Y%m%d-%H%M%S', T)
         CHprefix = [f'{fprefix}-CH{ch:02d}-' for ch in range(1,33)]
 
-        self._last_name.post(fprefix)
+        self._last_name.post(fprefix, timestamp=time.time())
 
         await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*32)
         await self.ctxt.put(self.FileBase, [{'value':p} for p in CHprefix])
@@ -232,11 +232,11 @@ class Engine:
 
         await self.ctxt.put(self.acq.name, {'value.index':1})
         _log.info('Acquiring...')
-        self._last_msg.post('Acquire') # everything up to this point should happen quickly
+        self._last_msg.post('Acquire', timestamp=time.time()) # everything up to this point should happen quickly
 
         await self._sequenceStop.wait()
         _log.info('Stop Acquire...')
-        self._last_msg.post('Stopping...') # acknowledge stop command
+        self._last_msg.post('Stopping...', timestamp=time.time()) # acknowledge stop command
 
         await self.ctxt.put(self.acq.name, {'value.index':0})
         _log.debug('Stopped Acquire...')
@@ -262,7 +262,7 @@ class Engine:
             json.dump(info, F, indent=' ')
             _log.debug('Wrote second JSON %s', F.name)
 
-        self._last_msg.post('Post-process')
+        self._last_msg.post('Post-process', timestamp=time.time())
 
         # run as seperate process to mimic testing environment
         await runProc(
@@ -275,7 +275,7 @@ class Engine:
         os.rename(f'{hdr}.tmp', str(hdr))
         _log.debug('Finished with: %s', hdr)
 
-        self._last_out.post(str(hdr.absolute()))
+        self._last_out.post(str(hdr.absolute()), timestamp=time.time())
 
 def getargs():
     from argparse import ArgumentParser
