@@ -175,7 +175,6 @@ class Engine:
             _log.debug('Cleanup after sequence')
             try:
                 self._run_stop.post(0)
-                self._status.post(0)
                 async with asyncio.timeout(5.0): # bound time of cleanup.  eg. during cancel()
                     await self.ctxt.put(self.acq.name, {'value.index':0})
                     await self.ctxt.put(self.Record, [{'value.index':0}]*32)
