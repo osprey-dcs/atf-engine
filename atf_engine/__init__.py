@@ -245,6 +245,10 @@ class Engine:
         # TODO: how to do this properly?
         await asyncio.sleep(5.0)
 
+        Tend = time.time()
+        T = time.localtime(Tend)
+        info['AcquisitionEndDate'] = time.strftime('%Y%m%d %H%M%S%z', T)
+
         # find .dat files
         info['Chassis'] = []
         for chas in Chassis:
