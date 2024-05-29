@@ -68,6 +68,7 @@ class Engine:
                     'Inuse': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:USE'),
                     'Name': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:NAME'),
                     'Desc': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:DESC'),
+                    'Desc5': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:DESC5'),
                     'Egu': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:EGU'),
                     'Slope': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:SLO'),
                     'Intercept': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:OFF'),
