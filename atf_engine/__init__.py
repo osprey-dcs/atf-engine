@@ -74,7 +74,7 @@ class Engine:
                     'Intercept': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:OFF'),
                     'Coupling': PV(f'{prefix}{node:02d}:ACQ:coupling:{ch:02d}'),
                     'ResponseNode': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:RESPNODE'),
-                    'ResponseDirection': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:RESPDIR.RVAL', signed=True),
+                    'ResponseDirection': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:RESPDIR_RVAL'),
                     'Type': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:SDTYP.RVAL'),
                     'LastCal': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:TCAL'), # posix time
                     'ReferenceNode':0,
