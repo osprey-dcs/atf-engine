@@ -1,0 +1,25 @@
+[Service]
+Type=simple
+ExecStart=/usr/local/epics/usr/bin/procServ \
+  --foreground --logfile - --name atf-engine \
+  --ignore ^D^C^] --logoutcmd ^D \
+  --chdir /opt/atf-engine \
+  --info-file %t/atf-engine/info \
+  -P unix:%t/atf-engine/control \
+  -P 10100 \
+  /opt/venv/bin/python -m atf_engine \
+  --root /data \
+  --fileConverter /opt/atf-previewer/build/fileReformatter2/FileReformatter2
+
+RuntimeDirectory=atf-engine
+StandardOutput=syslog
+StandardError=inherit
+SyslogIdentifier=atf-engine
+#User=ioc
+#Group=nogroup
+# Until can get rid of atf-acquire.py and avoid permissions conflict
+User=atf
+Group=atf
+
+[Install]
+WantedBy=multi-user.target
