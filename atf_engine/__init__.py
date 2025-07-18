@@ -50,9 +50,9 @@ class Engine:
         # ADC run output
         self.acq = PV(f'{prefix}ACQ:enable')
 
-        self.FileDir = [f'{prefix}{node:02d}:FileDir-SP' for node in range(1,33)]
-        self.FileBase = [f'{prefix}{node:02d}:FileBase-SP' for node in range(1,33)]
-        self.Record = [f'{prefix}{node:02d}:Record-Sel' for node in range(1,33)]
+        self.FileDir = [f'{prefix}{node:02d}:FileDir-SP' for node in range(1,self.nchas+1)]
+        self.FileBase = [f'{prefix}{node:02d}:FileBase-SP' for node in range(1,self.nchas+1)]
+        self.Record = [f'{prefix}{node:02d}:Record-Sel' for node in range(1,self.nchas+1)]
 
         self.info = {
             'AcquisitionId': PV(f'{prefix}SA:DESC'),
@@ -81,8 +81,8 @@ class Engine:
                     'ReferenceNode':0,
                     'ReferenceDirection':0,
                 }
-                for node in range(1, 33)
-                for ch in range(1, 33)
+                for node in range(1, self.nchas+1)
+                for ch in range(1, self.nchas+1)
             ],
             'Chassis': [],
         }
@@ -179,9 +179,9 @@ class Engine:
                 self._run_stop.post(0, timestamp=time.time())
                 async with asyncio.timeout(5.0): # bound time of cleanup.  eg. during cancel()
                     await self.ctxt.put(self.acq.name, {'value.index':0})
-                    await self.ctxt.put(self.Record, [{'value.index':0}]*self.chas)
-                    await self.ctxt.put(self.FileDir, [{'value':''}]*self.chas)
-                    await self.ctxt.put(self.FileBase, [{'value':''}]*self.chas)
+                    await self.ctxt.put(self.Record, [{'value.index':0}]*self.nchas)
+                    await self.ctxt.put(self.FileDir, [{'value':''}]*self.nchas)
+                    await self.ctxt.put(self.FileBase, [{'value':''}]*self.nchas)
             finally:
                 self._sequenceT = self._sequenceStop = None
 
@@ -217,13 +217,13 @@ class Engine:
         _log.info('Output directory: %s', rundir)
 
         fprefix = time.strftime(f'{desc}-%Y%m%d-%H%M%S', T)
-        CHprefix = [f'{fprefix}-CH{ch:02d}-' for ch in range(1,33)]
+        CHprefix = [f'{fprefix}-CH{ch:02d}-' for ch in range(1,self.nchas+1)]
 
         self._last_name.post(fprefix, timestamp=time.time())
 
-        await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*self.chas)
+        await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*self.nchas)
         await self.ctxt.put(self.FileBase, [{'value':p} for p in CHprefix])
-        await self.ctxt.put(self.Record, [{'value.index':chas in Chassis} for chas in range(1,33)])
+        await self.ctxt.put(self.Record, [{'value.index':chas in Chassis} for chas in range(1,self.nchas+1)])
         _log.debug('Recording paths are set')
 
         # write out only meta-data before any .dat written for context if something goes wrong...
