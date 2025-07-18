@@ -21,8 +21,9 @@ from .convert import findexe, runProc
 _log = logging.getLogger(__name__)
 
 class Engine:
-    def __init__(self, prefix:str, base:Path, fileConverter:str):
+    def __init__(self, prefix:str, nchas:int, base:Path, fileConverter:str):
         self.outbase = base
+        self.nchas = nchas
         self.fileConverter = fileConverter
         self.ctxt = Context(nt=False)
         self.cond = asyncio.Condition()
@@ -64,7 +65,7 @@ class Engine:
             'Signals': [
                 {
                     'Address': {'Chassis':node, 'Channel':ch},
-                    'SigNum': (node-1)*32 + ch,
+                    'SigNum': (node-1)*self.nchas + ch,
                     'Inuse': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:USE'),
                     'Name': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:NAME'),
                     'Desc': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:DESC'),
@@ -178,9 +179,9 @@ class Engine:
                 self._run_stop.post(0, timestamp=time.time())
                 async with asyncio.timeout(5.0): # bound time of cleanup.  eg. during cancel()
                     await self.ctxt.put(self.acq.name, {'value.index':0})
-                    await self.ctxt.put(self.Record, [{'value.index':0}]*32)
-                    await self.ctxt.put(self.FileDir, [{'value':''}]*32)
-                    await self.ctxt.put(self.FileBase, [{'value':''}]*32)
+                    await self.ctxt.put(self.Record, [{'value.index':0}]*self.chas)
+                    await self.ctxt.put(self.FileDir, [{'value':''}]*self.chas)
+                    await self.ctxt.put(self.FileBase, [{'value':''}]*self.chas)
             finally:
                 self._sequenceT = self._sequenceStop = None
 
@@ -220,7 +221,7 @@ class Engine:
 
         self._last_name.post(fprefix, timestamp=time.time())
 
-        await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*32)
+        await self.ctxt.put(self.FileDir, [{'value':str(rundir)}]*self.chas)
         await self.ctxt.put(self.FileBase, [{'value':p} for p in CHprefix])
         await self.ctxt.put(self.Record, [{'value.index':chas in Chassis} for chas in range(1,33)])
         _log.debug('Recording paths are set')
@@ -287,6 +288,8 @@ def getargs():
     P = ArgumentParser()
     P.add_argument('--prefix', default='FDAS:',
                    help='Global PV name prefix')
+    P.add_argument('--num-chassis', type=int, metavar='N', default=32,
+                   help='Number of Quartz chassis (01 -> NN)')
     P.add_argument('--root', type=Path, default=Path('/data'),
                    help='Data directory root')
     P.add_argument('-v', '--verbose', dest='level', default=logging.INFO,
@@ -304,7 +307,7 @@ async def main(args):
     import signal
     loop = asyncio.get_running_loop()
 
-    async with Engine(prefix=args.prefix, base=args.root, fileConverter=args.fileConverter) as E:
+    async with Engine(prefix=args.prefix, nchas=args.num_chassis, base=args.root, fileConverter=args.fileConverter) as E:
         with Server(providers=[E.serv_pvs]):
             done = asyncio.Event()
             loop.add_signal_handler(signal.SIGINT, done.set)
