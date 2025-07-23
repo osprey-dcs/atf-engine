@@ -65,7 +65,7 @@ class Engine:
             'Signals': [
                 {
                     'Address': {'Chassis':node, 'Channel':ch},
-                    'SigNum': (node-1)*self.nchas + ch,
+                    'SigNum': (node-1)*32 + ch,
                     'Inuse': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:USE'),
                     'Name': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:NAME'),
                     'Desc': PV(f'{prefix}{node:02d}:SA:Ch{ch:02d}:DESC'),
@@ -82,7 +82,7 @@ class Engine:
                     'ReferenceDirection':0,
                 }
                 for node in range(1, self.nchas+1)
-                for ch in range(1, self.nchas+1)
+                for ch in range(1, 33)
             ],
             'Chassis': [],
         }
