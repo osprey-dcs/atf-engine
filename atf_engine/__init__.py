@@ -2,13 +2,11 @@
 import asyncio
 import json
 import logging
-import shutil
 import time
 import glob
 import os
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from p4p.nt import NTScalar, NTEnum
 from p4p.client.asyncio import Context
