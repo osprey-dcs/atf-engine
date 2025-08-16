@@ -1,1 +1,3 @@
 p4p
+# see atf_engine.datcleaner.AInotify
+inotify~=0.2
