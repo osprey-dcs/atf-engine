@@ -2,3 +2,4 @@ __pycache__/
 *.j
 *.hdr
 *.dat
+*.so

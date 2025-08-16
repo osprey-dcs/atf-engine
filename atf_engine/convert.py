@@ -2,8 +2,13 @@ import asyncio
 import json
 import logging
 import shutil
+import time
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from concurrent.futures import ThreadPoolExecutor
+
+from ._convert import convert2j
 
 _log = logging.getLogger(__name__)
 
@@ -22,8 +27,8 @@ def getargs():
                    help='Enable extra application logging')
     P.add_argument('-d', '--debug', action='store_true',
                    help='Enable extra asyncio logging')
-    P.add_argument('--fileConverter', type=findexe,
-                   help='Location of FileReformatter2 executable')
+    P.add_argument('--fileConverter', type=findexe, dest='ignored',
+                   help='Location of FileReformatter2 executable (no longer used)')
     P.add_argument('input', type=Path,
                    help='Input JSON header file')
     P.add_argument('output', type=Path,
@@ -48,7 +53,7 @@ async def runProc(*args, **kws):
 
 
 async def main(args):
-    exe = args.fileConverter or findexe('FileReformatter2')
+    loop = asyncio.get_running_loop()
 
     _log.debug('Read %s', args.input)
     with args.input.open('r') as F:
@@ -67,48 +72,83 @@ async def main(args):
     with TemporaryDirectory(dir=outdir) as scratch:
         scratch = Path(scratch)
 
-        frags = []
-        async with asyncio.TaskGroup() as tg:
-            for chas in info['Chassis']:
-                n = chas['Chassis']
-                dat = chas['Dat']
-                assert len(dat)==1, dat
+        jfiles:{(int,int):Path} = {}
 
-                chas_scratch = scratch / f'CH{n:02d}'
-                chas_scratch.mkdir()
-                frag = chas_scratch / 'out.hdr'
-                frags.append(frag)
-                tg.create_task(runProc(
-                    exe,
-                    '--chassis', str(n),
-                    '--output', str(frag),
-                    str(args.input),
-                    str(args.input.parent.joinpath(dat[0])),
-                ))
-        # all tasks complete successfully
+        with ThreadPoolExecutor(max_workers=len(info['Chassis'])) as pool:
+            async with asyncio.TaskGroup() as sched:
+                jobs = []
+                for chas in info['Chassis']:
+                    async def process_chas(chas):
+                        _log.debug('Process chassis %r', chas)
+                        n = chas['Chassis']
+                        dat:list = chas['Dat']
+                        dat = [str(args.input.parent / d) for d in dat]
 
-        for frag in frags:
-            with frag.open('r') as F:
-                finfo = json.load(F)
+                        chas_scratch = scratch / f'CH{n:02d}'
+                        chas_scratch.mkdir()
 
-            for sig in finfo['Signals']:
-                idx = idxCH[(sig['Address']['Chassis'], sig['Address']['Channel'])]
-                assert info['Signals'][idx]['Address']==sig['Address']
+                        T0 = time.monotonic()
+                        chas['Errors'] = errs = await loop.run_in_executor(pool, convert2j, dat, chas_scratch)
+                        Td = time.monotonic() - T0
+                        if errs:
+                            _log.error('chassis %s errors %r', n, errs)
 
-                chan_data = frag.parent.joinpath(sig['OutDataFile'])
-                assert chan_data.exists(), chan_data
+                        for c in range(32):
+                            chanj = chas_scratch / f'CH{c:02d}.j' # channel zero indexed
+                            if chanj.exists(): # missing j files below
+                                jfiles[(n, c+1)] = chanj # chas and chan now one indexed
 
-                chas_dir = outdir / f"{args.output.stem}-CH{sig['Address']['Chassis']:02d}"
-                chan_file = chas_dir / f"ch{sig['Address']['Channel']}{chan_data.suffix}"
+                        _log.debug('Complete chassis %r in %f sec', chas, Td)
 
-                chas_dir.mkdir(exist_ok=True)
-                chan_file = chan_data.rename(chan_file) # move (not copy) out of tempdir
+                    jobs.append(sched.create_task(process_chas(chas)))
+        # all jobs complete, all .j files created under scratch
 
-                info['Signals'][idx]['OutDataFile'] = str(chan_file.relative_to(args.output.parent))
+        _log.debug('Collecting')
+
+        for sig in info['Signals']:
+            chas, chan = sig['Address']['Chassis'], sig['Address']['Channel']
+            if (chas, chan) not in jfiles:
+                raise RuntimeError(f'Missing j for {chas}, {chan}')
+
+        # adjust .dat file paths
+        for chas in info['Chassis']:
+            dats = []
+            for dat in chas['Dat']:
+                dats.append(
+                    # Path.relative_to() does not like having to traverse up and back down
+                    #(args.input.parent.absolute() / dat).relative_to(args.output.parent.absolute())
+                    os.path.join(
+                        os.path.relpath(args.input.parent, args.output.parent),
+                        dat,
+                    )
+                )
+            chas['Dat'] = dats
+
+        # from now start to modify outdir
+        # move j files out of scratch and update json info
+
+        outdir:Path = args.output.parent
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        for sig in info['Signals']:
+            chas, chan = sig['Address']['Chassis'], sig['Address']['Channel']
+            inj = jfiles[(chas, chan)]
+
+            outj = outdir / f"{args.output.stem}-CH{chas:02d}" / f"ch{chan}.j"
+            outj.parent.mkdir(exist_ok=True)
+
+            inj.rename(outj) # since both are on the same filesystem, this should be fast meta-data update
+
+            sig['OutDataFile'] = str(outj.relative_to(outdir))
+
+        _log.debug('Done with scratch')
+    # done with scratch
+    _log.debug('Writing JSON')
 
     with args.output.open('w') as F:
         json.dump(info, F, indent='  ')
 
+    _log.debug('Done')
 
 if __name__=='__main__':
     args = getargs().parse_args()

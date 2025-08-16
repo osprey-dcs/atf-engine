@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import time
-import glob
 import os
 import sys
 from pathlib import Path
@@ -15,6 +14,7 @@ from p4p.server.asyncio import SharedPV
 
 from .pvcache import PVCache, PVEncoder
 from .convert import findexe, runProc
+from .datcleaner import DatCleaner
 
 _log = logging.getLogger(__name__)
 
@@ -35,18 +35,26 @@ class Engine:
         self._last_msg = SharedPV(nt=NTScalar('s'), initial='startup')
         self._last_name = SharedPV(nt=NTScalar('s'), initial='')
         self._last_out = SharedPV(nt=NTScalar('s'), initial='')
+        self._history = SharedPV(nt=NTScalar('I'), initial=0)
+        @self._history.put
+        def onPutHistory(pv, op):
+            pv.post(op.value(), timestamp=time.time())
+            op.done()
+
         self.serv_pvs = {
             f'{prefix}CTRL:Run-SP': self._run_stop,
             f'{prefix}SA:READY_': self._status,
             f'{prefix}CTRL:LastName-I': self._last_name,
             f'{prefix}CTRL:LastMsg-I': self._last_msg,
             f'{prefix}CTRL:LastFile-I': self._last_out,
+            f'{prefix}CTRL:FileCnt-SP': self._history,
         }
 
         # ready input
         self.ready = PV(f'{prefix}SA:READY')
         # ADC run output
         self.acq = PV(f'{prefix}ACQ:enable')
+
 
         self.FileDir = [f'{prefix}{node:02d}:FileDir-SP' for node in range(1,self.nchas+1)]
         self.FileBase = [f'{prefix}{node:02d}:FileBase-SP' for node in range(1,self.nchas+1)]
@@ -186,8 +194,7 @@ class Engine:
     async def _sequence(self):
         assert self.ready_to_go
 
-        Tstart = time.time()
-        T = time.localtime(Tstart) # customer requests localtime for string representations...
+        T = time.localtime(time.time()) # customer requests localtime for string representations...
 
         # snapshot full info tree.
         # Round trip uses PVEncoder to grab current value, or throw if any Disconnected
@@ -230,36 +237,46 @@ class Engine:
             F.write(jmeta)
             _log.debug('Wrote preliminary JSON %s', F.name)
 
-        await self.ctxt.put(self.acq.name, {'value.index':1})
-        _log.info('Acquiring...')
-        self._last_msg.post('Acquire', timestamp=time.time()) # everything up to this point should happen quickly
+        DC = DatCleaner(rundir, [f'{CHprefix[chas-1]}*.dat' for chas in Chassis])
+        def getCount():
+            return int(self._history.current())
+        DC.getCount = getCount
 
-        await self._sequenceStop.wait()
-        _log.info('Stop Acquire...')
-        self._last_msg.post('Stopping...', timestamp=time.time()) # acknowledge stop command
+        async with DC:
+            await self.ctxt.put(self.acq.name, {'value.index':1})
+            _log.info('Acquiring...')
+            self._last_msg.post('Acquire', timestamp=time.time()) # everything up to this point should happen quickly
 
-        await self.ctxt.put(self.acq.name, {'value.index':0})
-        _log.debug('Stopped Acquire...')
+            await self._sequenceStop.wait()
+            _log.info('Stop Acquire...')
+            self._last_msg.post('Stopping...', timestamp=time.time()) # acknowledge stop command
 
-        # need to wait for in-flight packets to land on disk.
-        # TODO: how to do this properly?
-        await asyncio.sleep(5.0)
+            await self.ctxt.put(self.acq.name, {'value.index':0})
+            _log.debug('Stopped Acquire...')
 
-        Tend = time.time()
-        T = time.localtime(Tend)
+            # need to wait for in-flight packets to land on disk.
+            # TODO: how to do this properly?
+            await asyncio.sleep(3.0)
+
+            # cause IOC to close final .dat file
+            await self.ctxt.put(self.Record, [{'value.index':0}]*self.nchas)
+
+            await asyncio.sleep(3.0)
+
+        T = time.localtime(time.time())
         info['AcquisitionEndDate'] = time.strftime('%Y%m%d %H%M%S%z', T)
 
         # find .dat files
         info['Chassis'] = []
-        for chas in Chassis:
-            _log.debug('look for chassis %d %s*.dat', chas, CHprefix[chas-1])
-            dats = glob.glob(str(rundir / f'{CHprefix[chas-1]}*.dat'))
-            if len(dats)!=1:
-                _log.warning('Not 1 .dat for chassis %d: %r', chas, dats)
+        for chas,(pat, dats) in zip(Chassis, DC.tracked()):
+            _log.debug('chassis %d dats: %r', chas, dats)
+
+            if len(dats)==0:
+                _log.warning('No .dat for chassis %d: %r', chas, dats)
 
             info['Chassis'].append({
                 'Chassis': chas,
-                'Dat': [str(Path(d).relative_to(hdr.parent)) for d in dats],
+                'Dat': [str((rundir / d).relative_to(hdr.parent)) for d in dats],
             })
 
         with hdr.open('w') as F: # must not already exist
