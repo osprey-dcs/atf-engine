@@ -42,6 +42,7 @@ class Engine:
             f'{prefix}CTRL:LastName-I': self._last_name,
             f'{prefix}CTRL:LastMsg-I': self._last_msg,
             f'{prefix}CTRL:LastFile-I': self._last_out,
+            f'{prefix}CTRL:FileCnt-SP': self._history,
         }
 
         # ready input
