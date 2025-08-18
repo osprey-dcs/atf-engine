@@ -4,7 +4,7 @@ import logging
 from fnmatch import fnmatch
 from pathlib import Path
 
-from inotify.constants import IN_CLOSE_WRITE
+from inotify.constants import IN_ALL_EVENTS, IN_MODIFY, IN_CLOSE_WRITE
 from inotify.adapters import Inotify, _DEFAULT_TERMINAL_EVENTS, TerminalEventException
 
 _log = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class DatCleaner:
     async def _handle(self):
         _log.debug('Tracking in %r', self._base)
         I = AInotify()
-        I.add_watch(str(self._base))
+        I.add_watch(str(self._base), IN_ALL_EVENTS&~IN_MODIFY) # exclude chatty modify event
 
         async for evt, evtnames, path, file in I.aevent_gen():
             if not (evt.mask & IN_CLOSE_WRITE):
