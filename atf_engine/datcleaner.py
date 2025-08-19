@@ -87,7 +87,7 @@ class DatCleaner:
                     _log.debug('mis-match %r, %r',pat, file)
                     continue
 
-                _log.debug('Close event %r, %r : %r', pat, file, trk)
+                _log.debug('Close event %r, %r, %s : %r', pat, file, C, trk)
                 trk.append(file)
 
                 if C>0:
