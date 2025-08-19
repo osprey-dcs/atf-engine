@@ -36,6 +36,11 @@ class Engine:
         self._last_name = SharedPV(nt=NTScalar('s'), initial='')
         self._last_out = SharedPV(nt=NTScalar('s'), initial='')
         self._history = SharedPV(nt=NTScalar('I'), initial=0)
+        @self._history.put
+        def onPutHistory(pv, op):
+            pv.post(op.value(), timestamp=time.time())
+            op.done()
+
         self.serv_pvs = {
             f'{prefix}CTRL:Run-SP': self._run_stop,
             f'{prefix}SA:READY_': self._status,
