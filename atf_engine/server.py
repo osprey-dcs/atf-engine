@@ -6,7 +6,9 @@ import time
 import os
 import shutil
 import sys
+import subprocess as SP
 from pathlib import Path
+from tempfile import TemporaryFile
 
 from p4p.nt import NTScalar, NTEnum
 from p4p.client.asyncio import Context
@@ -26,25 +28,30 @@ def findexe(s):
 
 async def runProc(*args, **kws):
     'Run child to completion'
+    kws.setdefault('stdin', SP.DEVNULL)
+    kws.setdefault('stderr', SP.STDOUT)
     cmd = ' '.join([repr(a) for a in args])
     _log.debug('Run: %s # %r', cmd, kws)
-    P = await asyncio.create_subprocess_exec(*args, **kws)
-    try:
-        await P.wait()
-    except asyncio.CancelledError:
-        _log.error('Killing: %d, %s', P.pid, cmd)
-        P.kill()
-        raise
-    else:
-        if P.returncode!=0:
-            raise RuntimeError(f'Error from {args!r}')
-    _log.debug('Success: %s', cmd)
+    with TemporaryFile() as L:
+        kws.setdefault('stdout', L.fileno())
+        P = await asyncio.create_subprocess_exec(*args, **kws)
+        output = ''
+        try:
+            await P.wait()
+        except asyncio.CancelledError:
+            _log.error('Killing: %d, %s', P.pid, cmd)
+            P.kill()
+            raise
+        finally:
+            L.seek(0) # paranoia
+            output = L.read().decode(errors='replace')
+    _log.debug('Complete: %s -> %s, %r', cmd, P.returncode, output[:30])
+    return P.returncode, output
 
 class Engine:
-    def __init__(self, prefix:str, nchas:int, base:Path, fileConverter:str):
+    def __init__(self, prefix:str, nchas:int, base:Path):
         self.outbase = base
         self.nchas = nchas
-        self.fileConverter = fileConverter
         self.ctxt = Context(nt=False)
         self.cond = asyncio.Condition()
         self.cache = PV = PVCache(self.ctxt, cond=self.cond)
@@ -195,14 +202,13 @@ class Engine:
             assert self._sequenceT==asyncio.current_task(), (self._sequenceT, asyncio.current_task())
             self._sequenceStop = asyncio.Event()
             await self._sequence()
-            self._last_msg.post('Success', timestamp=time.time())
-            _log.debug('Success')
+            _log.debug('Sequencer complete')
         except asyncio.CancelledError:
-            self._last_msg.post('Abort', timestamp=time.time())
+            self._last_msg.post('Abort', timestamp=time.time(), severity=2)
             raise
         except:
             _log.exception("oops")
-            self._last_msg.post('Failure', timestamp=time.time())
+            self._last_msg.post('Failure', timestamp=time.time(), severity=2)
         finally:
             _log.debug('Cleanup after sequence')
             try:
@@ -269,11 +275,11 @@ class Engine:
         async with DC:
             await self.ctxt.put(self.acq.name, {'value.index':1})
             _log.info('Acquiring...')
-            self._last_msg.post('Acquire', timestamp=time.time()) # everything up to this point should happen quickly
+            self._last_msg.post('Acquire', timestamp=time.time(), severity=1) # everything up to this point should happen quickly
 
             await self._sequenceStop.wait()
             _log.info('Stop Acquire...')
-            self._last_msg.post('Stopping...', timestamp=time.time()) # acknowledge stop command
+            self._last_msg.post('Stopping...', timestamp=time.time(), severity=1) # acknowledge stop command
 
             await self.ctxt.put(self.acq.name, {'value.index':0})
             _log.debug('Stopped Acquire...')
@@ -307,20 +313,27 @@ class Engine:
             json.dump(info, F, indent=' ')
             _log.debug('Wrote second JSON %s', F.name)
 
-        self._last_msg.post('Post-process', timestamp=time.time())
+        self._last_msg.post('Post-process', timestamp=time.time(), severity=1)
 
         # run as seperate process to mimic testing environment
-        await runProc(
+        code, convert_output = await runProc(
             sys.executable,
             '-m', 'atf_engine.convert',
-            '--fileConverter', self.fileConverter,
             str(hdr),
             f'{hdr}.tmp',
         )
+        self._convert_result.post(convert_output)
+        if code not in (0, 1):
+            raise RuntimeError(f'Error from {hdr!r}')
         os.rename(f'{hdr}.tmp', str(hdr))
         _log.debug('Finished with: %s', hdr)
 
         self._last_out.post(str(hdr.absolute()), timestamp=time.time())
+
+        if code==0:
+            self._last_msg.post('Success', timestamp=time.time(), severity=0)
+        else:
+            self._last_msg.post('Cmpl with Errors', timestamp=time.time(), severity=2)
 
 def getargs():
     from argparse import ArgumentParser
@@ -336,7 +349,7 @@ def getargs():
                    help='Enable extra application logging')
     P.add_argument('-d', '--debug', action='store_true',
                    help='Enable extra asyncio logging')
-    P.add_argument('--fileConverter', type=findexe,
+    P.add_argument('--fileConverter', dest='ignored',
                    help='Location of FileReformatter2 executable')
     return P
 
@@ -346,7 +359,7 @@ async def main(args):
     import signal
     loop = asyncio.get_running_loop()
 
-    async with Engine(prefix=args.prefix, nchas=args.num_chassis, base=args.root, fileConverter=args.fileConverter) as E:
+    async with Engine(prefix=args.prefix, nchas=args.num_chassis, base=args.root) as E:
         with Server(providers=[E.serv_pvs]):
             done = asyncio.Event()
             loop.add_signal_handler(signal.SIGINT, done.set)

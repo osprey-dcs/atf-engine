@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from concurrent.futures import ThreadPoolExecutor
@@ -66,8 +67,8 @@ async def main(args):
                         T0 = time.monotonic()
                         chas['Errors'] = errs = await loop.run_in_executor(pool, convert2j, dat, chas_scratch)
                         Td = time.monotonic() - T0
-                        if errs:
-                            _log.error('chassis %s errors %r', n, errs)
+                        for err in errs:
+                            print(f'Error: Chas {n} : {err}')
 
                         for c in range(32):
                             chanj = chas_scratch / f'CH{c:02d}.j' # channel zero indexed
@@ -75,9 +76,11 @@ async def main(args):
                                 jfiles[(n, c+1)] = chanj # chas and chan now one indexed
 
                         _log.debug('Complete chassis %r in %f sec', chas, Td)
+                        return len(errs)
 
                     jobs.append(sched.create_task(process_chas(chas)))
         # all jobs complete, all .j files created under scratch
+            total_errors = sum([j.result() for j in jobs])
 
         _log.debug('Collecting')
 
@@ -126,7 +129,9 @@ async def main(args):
 
     _log.debug('Done')
 
+    return 1 if total_errors else 0
+
 if __name__=='__main__':
     args = getargs().parse_args()
     logging.basicConfig(level=args.level)
-    asyncio.run(main(args), debug=args.debug)
+    sys.exit(asyncio.run(main(args), debug=args.debug))
