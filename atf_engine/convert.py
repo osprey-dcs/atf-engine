@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import shutil
 import time
 import os
 from pathlib import Path
@@ -12,12 +11,6 @@ from ._convert import convert2j
 
 _log = logging.getLogger(__name__)
 
-def findexe(s):
-    R = shutil.which(s)
-    if R is None:
-        raise RuntimeError(f'Executable not found: {s}')
-    return R
-
 def getargs():
     from argparse import ArgumentParser
 
@@ -27,30 +20,13 @@ def getargs():
                    help='Enable extra application logging')
     P.add_argument('-d', '--debug', action='store_true',
                    help='Enable extra asyncio logging')
-    P.add_argument('--fileConverter', type=findexe, dest='ignored',
+    P.add_argument('--fileConverter', dest='ignored',
                    help='Location of FileReformatter2 executable (no longer used)')
     P.add_argument('input', type=Path,
                    help='Input JSON header file')
     P.add_argument('output', type=Path,
                    help='Output JSON header file.  Data files placed relative.')
     return P
-
-async def runProc(*args, **kws):
-    'Run child to completion'
-    cmd = ' '.join([repr(a) for a in args])
-    _log.debug('Run: %s # %r', cmd, kws)
-    P = await asyncio.create_subprocess_exec(*args, **kws)
-    try:
-        await P.wait()
-    except asyncio.CancelledError:
-        _log.error('Killing: %d, %s', P.pid, cmd)
-        P.kill()
-        raise
-    else:
-        if P.returncode!=0:
-            raise RuntimeError(f'Error from {args!r}')
-    _log.debug('Success: %s', cmd)
-
 
 async def main(args):
     loop = asyncio.get_running_loop()

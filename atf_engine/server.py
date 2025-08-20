@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,10 +14,31 @@ from p4p.server import Server
 from p4p.server.asyncio import SharedPV
 
 from .pvcache import PVCache, PVEncoder
-from .convert import findexe, runProc
 from .datcleaner import DatCleaner
 
 _log = logging.getLogger(__name__)
+
+def findexe(s):
+    R = shutil.which(s)
+    if R is None:
+        raise RuntimeError(f'Executable not found: {s}')
+    return R
+
+async def runProc(*args, **kws):
+    'Run child to completion'
+    cmd = ' '.join([repr(a) for a in args])
+    _log.debug('Run: %s # %r', cmd, kws)
+    P = await asyncio.create_subprocess_exec(*args, **kws)
+    try:
+        await P.wait()
+    except asyncio.CancelledError:
+        _log.error('Killing: %d, %s', P.pid, cmd)
+        P.kill()
+        raise
+    else:
+        if P.returncode!=0:
+            raise RuntimeError(f'Error from {args!r}')
+    _log.debug('Success: %s', cmd)
 
 class Engine:
     def __init__(self, prefix:str, nchas:int, base:Path, fileConverter:str):
@@ -40,6 +62,7 @@ class Engine:
         def onPutHistory(pv, op):
             pv.post(op.value(), timestamp=time.time())
             op.done()
+        self._convert_result = SharedPV(nt=NTScalar('s'), initial='')
 
         self.serv_pvs = {
             f'{prefix}CTRL:Run-SP': self._run_stop,
@@ -48,6 +71,7 @@ class Engine:
             f'{prefix}CTRL:LastMsg-I': self._last_msg,
             f'{prefix}CTRL:LastFile-I': self._last_out,
             f'{prefix}CTRL:FileCnt-SP': self._history,
+            f'{prefix}CTRL:CnvtRslt-I':self._convert_result,
         }
 
         # ready input
