@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from . import main, getargs
+from .server import main, getargs
 
 if __name__=='__main__':
     args = getargs().parse_args()
