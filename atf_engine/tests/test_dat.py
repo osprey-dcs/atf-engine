@@ -13,8 +13,9 @@ def make_packets(nsamp:int,
     pkts = []
     for i, n in enumerate(range(nsamp)):
         if not pkts or (i%32==0 and len(pkts[-1])>mtu-16-3*32):
+            sec, ns = divmod(1000000*seqno, 1000000000)
             pkts.append(
-                struct.pack('>IIQII', 0, 0xffffffff, seqno, 0x12345678, 10*seqno)
+                struct.pack('>IIQII', 0, 0xffffffff, seqno, 0x12345678+sec, ns)
             )
             seqno += 1
             if limits:
@@ -45,7 +46,7 @@ def test_packets():
         pkts[0],
         b''.join([
             b'PSNB\x00\x00\x00\x88\x00\x00\x00*\x00\x00\x00*',
-            b'\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x01\x124Vx\x00\x00\x00\x0a',
+            b'\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x01\x124Vx\x00\x0fB@',
             b'\x11\x11\x11\x11""""DDDD\x88\x88\x88\x88',
         ]+[struct.pack('BBB', (x>>16)&0xff, (x>>8)&0xff, (x>>0)&0xff ) for x in range(14*32, 15*32)])
     ]
@@ -132,7 +133,7 @@ def test_lost_one(tmp_path:Path):
     indat.write_bytes(b''.join(pkts))
 
     errs = convert2j([str(indat)],tmp_path)
-    assert errs == ['Missing 1 [1203, 1204)']
+    assert errs == ['Missing 1 [1203, 1204) 0.002 s']
     expect = {
         n: array('i', [1, 0, 0, 98*4, 0] + list(range(n, 32*98, 32)))
         for n in range(32)
@@ -154,7 +155,7 @@ def test_lost_two(tmp_path:Path):
     indat.write_bytes(b''.join(pkts))
 
     errs = convert2j([str(indat)],tmp_path)
-    assert errs == ['Missing 2 [1203, 1205)']
+    assert errs == ['Missing 2 [1203, 1205) 0.003 s']
     expect = {
         n: array('i', [1, 0, 0, 98*4, 0] + list(range(n, 32*98, 32)))
         for n in range(32)

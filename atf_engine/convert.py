@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
 from ._convert import convert2j
@@ -27,6 +28,8 @@ def getargs():
                    help='Input JSON header file')
     P.add_argument('output', type=Path,
                    help='Output JSON header file.  Data files placed relative.')
+    P.add_argument('--force', action='store_true',
+                   help='Bypass limits on auto insertion of placeholder samples')
     return P
 
 async def main(args):
@@ -65,7 +68,10 @@ async def main(args):
                         chas_scratch.mkdir()
 
                         T0 = time.monotonic()
-                        chas['Errors'] = errs = await loop.run_in_executor(pool, convert2j, dat, chas_scratch)
+                        chas['Errors'] = errs = await loop.run_in_executor(
+                            pool,
+                            partial(convert2j, indats=dat, outdir=chas_scratch, force=args.force),
+                        )
                         Td = time.monotonic() - T0
                         for err in errs:
                             print(f'Error: Chas {n} : {err}')

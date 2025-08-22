@@ -272,11 +272,13 @@ struct QuartzNB {
 };
 
 struct priv {
-    uint64_t next_seqno;
+    uint64_t last_seqno;
+    uint64_t last_ns;
     uint32_t last_chmask;
     size_t last_nsamp;
     std::array<uint32_t, 32> last_channel;
     bool first = true;
+    bool force = false;
 
     std::string outdir;
 
@@ -327,6 +329,7 @@ void convert1(priv& pvt, const std::string& indat)
         msglen -= sizeof(QuartzNA);
         auto chmask = be32toh(hdrA.chmask);
         auto seqno = be64toh(hdrA.seqno);
+        auto nsec = uint64_t(be32toh(hdrA.sec))*1000000000 + be32toh(hdrA.ns);
 
         if(pvt.first) {
             pvt.first = false;
@@ -337,11 +340,22 @@ void convert1(priv& pvt, const std::string& indat)
             if(pvt.last_chmask != chmask)
                 throw std::runtime_error("channel mask changes mid-stream not supported");
 
-            if(pvt.next_seqno != seqno) {
-                // eg. expect 15, have 17.  15 and 16 missing.
-                auto nmissing = seqno - pvt.next_seqno;
+            auto nchan = __builtin_popcount(chmask);
 
-                pvt.errors.emplace_back(SB()<<"Missing "<<nmissing<<" ["<<pvt.next_seqno<<", "<<seqno<<")");
+            if(pvt.last_seqno+1 != seqno) {
+                // eg. expect 15, have 17.  15 and 16 missing.
+                auto nmissing = seqno - (pvt.last_seqno+1);
+                auto deltaT = (nsec - pvt.last_ns)*1e-9;
+                auto Fsamp = (nmissing*pvt.last_nsamp/nchan)/deltaT;
+
+                pvt.errors.emplace_back(SB()
+                                        <<"Missing "<<nmissing<<" ["<<(pvt.last_seqno+1)
+                                        <<", "<<seqno<<") "<<deltaT<<" s"
+                                        );
+
+                if(!pvt.force && (Fsamp < 0.9e3 || Fsamp>290e3))
+                    throw std::runtime_error(SB()<<"Inconsistency between timestamp "
+                                             <<deltaT<<" and seqno "<<nmissing<<", Fsamp "<<Fsamp);
 
                 const auto chmask = pvt.last_chmask;
 
@@ -362,7 +376,8 @@ void convert1(priv& pvt, const std::string& indat)
                 }
             }
         }
-        pvt.next_seqno = 1+seqno;
+        pvt.last_seqno = seqno;
+        pvt.last_ns = nsec;
 
         if(hasB) {
             auto hdrB(istrm.read_as<QuartzNB>());
@@ -405,10 +420,14 @@ void convert1(priv& pvt, const std::string& indat)
     }
 }
 
-void convert2j(const std::vector<std::string>& indats, const std::string& outdir, std::vector<std::string>& errors)
+void convert2j(const std::vector<std::string>& indats,
+               const std::string& outdir,
+               std::vector<std::string>& errors,
+               bool force)
 {
     priv pvt{};
     pvt.outdir = outdir;
+    pvt.force = force;
 
     for(auto& indat : indats) {
         convert1(pvt, indat);
@@ -560,17 +579,20 @@ struct PyRef {
     explicit operator bool() const { return obj; }
 };
 
-PyObject* call_convert2j(PyObject *unused, PyObject *args) noexcept
+PyObject* call_convert2j(PyObject *unused, PyObject *args, PyObject *kws) noexcept
 {
+    static const char* kwnames[] = {"indats", "outdir", "force", nullptr};
     try{
         (void)unused;
 
         PyObject *indats_py = nullptr;
         PyRef outdir_py;
+        int force = false;
 
-        if(!PyArg_ParseTuple(args, "O!O&",
+        if(!PyArg_ParseTupleAndKeywords(args, kws, "O!O&|p", const_cast<char**>(kwnames),
                              &PyList_Type, &indats_py,
-                             PyUnicode_FSConverter, (PyObject**)outdir_py.acquire()))
+                             PyUnicode_FSConverter, (PyObject**)outdir_py.acquire(),
+                             &force))
             return NULL;
 
         std::vector<std::string> indats;
@@ -586,7 +608,7 @@ PyObject* call_convert2j(PyObject *unused, PyObject *args) noexcept
 
         Py_BEGIN_ALLOW_THREADS;
         try{
-            convert2j(indats, PyBytes_AsString(outdir_py.obj), errors);
+            convert2j(indats, PyBytes_AsString(outdir_py.obj), errors, force);
         }catch(...){
             Py_BLOCK_THREADS;
             throw;
@@ -612,7 +634,7 @@ PyObject* call_convert2j(PyObject *unused, PyObject *args) noexcept
 }
 
 PyMethodDef methods[] = {
-    {"convert2j", call_convert2j, METH_VARARGS, ""},
+    {"convert2j", (PyCFunction)call_convert2j, METH_VARARGS|METH_KEYWORDS, ""},
     {NULL}
 };
 
