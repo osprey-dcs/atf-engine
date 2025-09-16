@@ -21,5 +21,9 @@ SyslogIdentifier=atf-engine
 User=atf
 Group=atf
 
+# Peak FD usage during post-processing on the order of 34x #chassis + some constant
+# set >= 32x chassis (1088)
+LimitNOFILE=2048
+
 [Install]
 WantedBy=multi-user.target
