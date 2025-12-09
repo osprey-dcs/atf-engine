@@ -8,8 +8,7 @@ ExecStart=/usr/local/epics/usr/bin/procServ \
   -P unix:%t/atf-engine/control \
   -P 10100 \
   /opt/venv/bin/python -m atf_engine \
-  --root /data \
-  --fileConverter /opt/atf-previewer/build/fileReformatter2/FileReformatter2
+  --root /data
 
 RuntimeDirectory=atf-engine
 StandardOutput=syslog
