@@ -4,9 +4,9 @@
 
 __all__ = ("TaskGroup",)
 
-from . import events
-from . import exceptions
-from . import tasks
+from asyncio import events
+from asyncio import exceptions
+from asyncio import tasks
 
 
 class TaskGroup:

@@ -9,6 +9,12 @@ from tempfile import TemporaryDirectory
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
+try:
+    from asyncio import TaskGroup
+except ImportError:
+    # backport for < 3.13
+    from .taskgroups import TaskGroup
+
 from ._convert import convert2j
 
 _log = logging.getLogger(__name__)
@@ -55,7 +61,7 @@ async def main(args):
         jfiles:{(int,int):Path} = {}
 
         with ThreadPoolExecutor(max_workers=len(info['Chassis'])) as pool:
-            async with asyncio.TaskGroup() as sched:
+            async with TaskGroup() as sched:
                 jobs = []
                 for chas in info['Chassis']:
                     async def process_chas(chas):
